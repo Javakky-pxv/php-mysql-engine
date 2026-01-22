@@ -100,6 +100,10 @@ final class FunctionEvaluator
                 return self::sqlCeiling($conn, $scope, $expr, $row, $result);
             case 'FLOOR':
                 return self::sqlFloor($conn, $scope, $expr, $row, $result);
+            case 'CONVERT_TZ':
+                return self::sqlConvertTz($conn, $scope, $expr, $row, $result);
+            case 'TIMESTAMPDIFF':
+                return self::sqlTimestampdiff($conn, $scope, $expr, $row, $result);
             case 'DATEDIFF':
                 return self::sqlDateDiff($conn, $scope, $expr, $row, $result);
             case 'DAY':
@@ -115,6 +119,8 @@ final class FunctionEvaluator
                 return self::sqlInetAton($conn, $scope, $expr, $row, $result);
             case 'INET_NTOA':
                 return self::sqlInetNtoa($conn, $scope, $expr, $row, $result);
+            case 'LEAST':
+                return self::sqlLeast($conn, $scope, $expr, $row, $result);
         }
 
         throw new ProcessorException("Function " . $expr->functionName . " not implemented yet");
@@ -348,9 +354,13 @@ final class FunctionEvaluator
     }
 
     /**
-     * @param array<string, Column> $columns
+     * @param FakePdoInterface $conn
+     * @param Scope $scope
+     * @param FunctionExpression $expr
+     * @param QueryResult $result
      *
-     * @return ?numeric
+     * @return float|int|mixed|string|null
+     * @throws ProcessorException
      */
     private static function sqlSum(
         FakePdoInterface $conn,
@@ -363,6 +373,11 @@ final class FunctionEvaluator
         $sum = 0;
 
         if (!$result->rows) {
+            $isQueryWithoutFromClause = empty($result->columns);
+            if ($expr instanceof FunctionExpression && $isQueryWithoutFromClause) {
+                return self::evaluate($conn, $scope, $expr, [], $result);
+            }
+
             return null;
         }
 
@@ -436,14 +451,20 @@ final class FunctionEvaluator
 
             $value = Evaluator::evaluate($conn, $scope, $expr, $row, $result);
 
-            if (!\is_scalar($value)) {
+            if (!\is_scalar($value) && !\is_null($value)) {
                 throw new \TypeError('Bad min value');
             }
 
             $values[] = $value;
         }
 
-        return self::castAggregate(\min($values), $expr, $result);
+        $min_value = \min($values);
+
+        if ($min_value === null) {
+            return null;
+        }
+
+        return self::castAggregate($min_value, $expr, $result);
     }
 
     /**
@@ -471,14 +492,20 @@ final class FunctionEvaluator
 
             $value = Evaluator::evaluate($conn, $scope, $expr, $row, $result);
 
-            if (!\is_scalar($value)) {
+            if (!\is_scalar($value) && !\is_null($value)) {
                 throw new \TypeError('Bad max value');
             }
 
             $values[] = $value;
         }
 
-        return self::castAggregate(\max($values), $expr, $result);
+        $max_value = \max($values);
+
+        if ($max_value === null) {
+            return null;
+        }
+
+        return self::castAggregate($max_value, $expr, $result);
     }
 
     /**
@@ -1574,5 +1601,182 @@ final class FunctionEvaluator
             default:
                 throw new ProcessorException('MySQL INTERVAL unit ' . $expr->unit . ' not supported yet');
         }
+    }
+
+    /**
+     * @param FakePdoInterface $conn
+     * @param Scope $scope
+     * @param FunctionExpression $expr
+     * @param array<string, mixed> $row
+     * @param QueryResult $result
+     *
+     * @return string|null
+     * @throws ProcessorException
+     */
+    private static function sqlConvertTz(
+        FakePdoInterface $conn,
+        Scope $scope,
+        FunctionExpression $expr,
+        array $row,
+        QueryResult $result)
+    {
+        $args = $expr->args;
+
+        if (count($args) !== 3) {
+            throw new \InvalidArgumentException("CONVERT_TZ() requires exactly 3 arguments");
+        }
+
+        if ($args[0] instanceof ColumnExpression && empty($row)) {
+            return null;
+        }
+
+        /** @var string|null $dtValue */
+        $dtValue = Evaluator::evaluate($conn, $scope, $args[0], $row, $result);
+        /** @var string|null $fromTzValue */
+        $fromTzValue = Evaluator::evaluate($conn, $scope, $args[1], $row, $result);
+        /** @var string|null $toTzValue */
+        $toTzValue = Evaluator::evaluate($conn, $scope, $args[2], $row, $result);
+
+        if ($dtValue === null || $fromTzValue === null || $toTzValue === null) {
+            return null;
+        }
+
+        try {
+            $dt = new \DateTime($dtValue, new \DateTimeZone($fromTzValue));
+            $dt->setTimezone(new \DateTimeZone($toTzValue));
+            return $dt->format('Y-m-d H:i:s');
+        } catch (\Exception $e) {
+            return null;
+        }
+    }
+
+    /**
+     * @param FakePdoInterface $conn
+     * @param Scope $scope
+     * @param FunctionExpression $expr
+     * @param array<string, mixed> $row
+     * @param QueryResult $result
+     *
+     * @return int
+     * @throws ProcessorException
+     */
+    private static function sqlTimestampdiff(
+        FakePdoInterface $conn,
+        Scope $scope,
+        FunctionExpression $expr,
+        array $row,
+        QueryResult $result
+    ) {
+        $args = $expr->args;
+
+        if (\count($args) !== 3) {
+            throw new ProcessorException("MySQL TIMESTAMPDIFF() function must be called with three arguments");
+        }
+
+        if (!$args[0] instanceof ColumnExpression) {
+            throw new ProcessorException("MySQL TIMESTAMPDIFF() function should be called with a unit for interval");
+        }
+
+        /** @var string|null $unit */
+        $unit = $args[0]->columnExpression;
+        /** @var string|int|float|null $start */
+        $start = Evaluator::evaluate($conn, $scope, $args[1], $row, $result);
+        /** @var string|int|float|null $end */
+        $end = Evaluator::evaluate($conn, $scope, $args[2], $row, $result);
+
+        try {
+            $dtStart = new \DateTime((string) $start);
+            $dtEnd   = new \DateTime((string) $end);
+        } catch (\Exception $e) {
+            throw new ProcessorException("Invalid datetime value passed to TIMESTAMPDIFF()");
+        }
+
+        $interval = $dtStart->diff($dtEnd);
+
+        // Calculate difference in seconds for fine-grained units
+        $seconds = $dtEnd->getTimestamp() - $dtStart->getTimestamp();
+
+        switch (strtoupper((string)$unit)) {
+            case 'MICROSECOND':
+                return $seconds * 1000000;
+            case 'SECOND':
+                return $seconds;
+            case 'MINUTE':
+                return (int) floor($seconds / 60);
+            case 'HOUR':
+                return (int) floor($seconds / 3600);
+            case 'DAY':
+                return (int) $interval->days * ($seconds < 0 ? -1 : 1);
+            case 'WEEK':
+                return (int) floor($interval->days / 7) * ($seconds < 0 ? -1 : 1);
+            case 'MONTH':
+                return ($interval->y * 12 + $interval->m) * ($seconds < 0 ? -1 : 1);
+            case 'QUARTER':
+                $months = $interval->y * 12 + $interval->m;
+                return (int) floor($months / 3) * ($seconds < 0 ? -1 : 1);
+            case 'YEAR':
+                return $interval->y * ($seconds < 0 ? -1 : 1);
+            default:
+                throw new ProcessorException("Unsupported unit '$unit' in TIMESTAMPDIFF()");
+        }
+    }
+
+    /**
+     * @param FakePdoInterface $conn
+     * @param Scope $scope
+     * @param FunctionExpression $expr
+     * @param array<string, mixed> $row
+     * @param QueryResult $result
+     *
+     * @return mixed|null
+     * @throws ProcessorException
+     */
+    private static function sqlLeast(
+        FakePdoInterface $conn,
+        Scope $scope,
+        FunctionExpression $expr,
+        array $row,
+        QueryResult $result
+    )
+    {
+        $args = $expr->args;
+
+        if (\count($args) < 2) {
+            throw new ProcessorException("Incorrect parameter count in the call to native function 'LEAST'");
+        }
+
+        $is_any_float = false;
+        $is_any_string = false;
+        $precision = 0;
+        $evaluated_args = [];
+
+        foreach ($args as $arg) {
+            /** @var string|int|float|null $evaluated_arg */
+            $evaluated_arg = Evaluator::evaluate($conn, $scope, $arg, $row, $result);
+            if (is_null($evaluated_arg)) {
+                return null;
+            }
+
+            if (is_float($evaluated_arg)) {
+                $is_any_float = true;
+                $precision = max($precision, strlen(substr(strrchr((string) $evaluated_arg, "."), 1)));
+            }
+
+            $is_any_string = $is_any_string || is_string($evaluated_arg);
+            $evaluated_args[] = $evaluated_arg;
+        }
+
+        if ($is_any_string) {
+            $evaluated_str_args = array_map(function($arg) {
+                return (string) $arg;
+            }, $evaluated_args);
+            return min($evaluated_str_args);
+        }
+
+        if ($is_any_float) {
+            return number_format((float) min($evaluated_args), $precision);
+        }
+
+        return min($evaluated_args);
     }
 }

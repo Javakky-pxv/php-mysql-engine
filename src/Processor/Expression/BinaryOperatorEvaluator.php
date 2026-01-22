@@ -154,7 +154,7 @@ final class BinaryOperatorEvaluator
                             return !$expr->negatedInt;
                         }
 
-                        return $l_value == $r_value ? 1 : 0 ^ $expr->negatedInt;
+                        return ($l_value == $r_value ? 1 : 0 ) ^ $expr->negatedInt;
 
                     case '<>':
                     case '!=':
@@ -167,35 +167,35 @@ final class BinaryOperatorEvaluator
                             return $expr->negatedInt;
                         }
 
-                        return $l_value != $r_value ? 1 : 0 ^ $expr->negatedInt;
+                        return ($l_value != $r_value ? 1 : 0) ^ $expr->negatedInt;
 
                     case '>':
                         if ($as_string) {
-                            return (string) $l_value > (string) $r_value ? 1 : 0 ^ $expr->negatedInt;
+                            return ((string) $l_value > (string) $r_value ? 1 : 0) ^ $expr->negatedInt;
                         }
 
-                        return (float) $l_value > (float) $r_value ? 1 : 0 ^ $expr->negatedInt;
+                        return ((float) $l_value > (float) $r_value ? 1 : 0 ) ^ $expr->negatedInt;
                         // no break
                     case '>=':
                         if ($as_string) {
-                            return (string) $l_value >= (string) $r_value ? 1 : 0 ^ $expr->negatedInt;
+                            return ((string) $l_value >= (string) $r_value ? 1 : 0) ^ $expr->negatedInt;
                         }
 
-                        return (float) $l_value >= (float) $r_value ? 1 : 0 ^ $expr->negatedInt;
+                        return ((float) $l_value >= (float) $r_value ? 1 : 0) ^ $expr->negatedInt;
 
                     case '<':
                         if ($as_string) {
-                            return (string) $l_value < (string) $r_value ? 1 : 0 ^ $expr->negatedInt;
+                            return ((string) $l_value < (string) $r_value ? 1 : 0) ^ $expr->negatedInt;
                         }
 
-                        return (float) $l_value < (float) $r_value ? 1 : 0 ^ $expr->negatedInt;
+                        return ((float) $l_value < (float) $r_value ? 1 : 0) ^ $expr->negatedInt;
 
                     case '<=':
                         if ($as_string) {
-                            return (string) $l_value <= (string) $r_value ? 1 : 0 ^ $expr->negatedInt;
+                            return ((string) $l_value <= (string) $r_value ? 1 : 0) ^ $expr->negatedInt;
                         }
 
-                        return (float) $l_value <= (float) $r_value ? 1 : 0 ^ $expr->negatedInt;
+                        return ((float) $l_value <= (float) $r_value ? 1 : 0) ^ $expr->negatedInt;
                 }
 
                 // PHPCS thinks there's a fallthrough here, but there provably is not
