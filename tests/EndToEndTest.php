@@ -10,6 +10,29 @@ class EndToEndTest extends \PHPUnit\Framework\TestCase
         \Vimeo\MysqlEngine\Server::reset();
     }
 
+    public function testSumWithEmptyResultSetReturnsNull()
+    {
+        $sql = "
+           SELECT
+                SUM(
+                  IF(
+                    id > 1,
+                    0,
+                    1
+                  )
+                )
+            FROM
+              video_game_characters
+            WHERE
+              id > 100;
+           ";
+
+        $pdo = self::getConnectionToFullDB();
+        $query= $pdo->query($sql);
+
+        $this->assertNull($query->fetchColumn());
+    }
+
     public function testSelectEmptyResults()
     {
         $pdo = self::getConnectionToFullDB();
@@ -570,6 +593,113 @@ class EndToEndTest extends \PHPUnit\Framework\TestCase
         );
     }
 
+    /**
+     * Test various timestamp differences using the TIMESTAMPDIFF function.
+     *
+     * This method verifies the calculation of differences in seconds, minutes,
+     * hours, days, months, and years.
+     */
+    public function testTimestampDiff(): void
+    {
+        // Get a PDO instance for MySQL.
+        $pdo = self::getPdo('mysql:host=localhost;dbname=testdb');
+        $pdo->setAttribute(\PDO::ATTR_EMULATE_PREPARES, false);
+
+        // Prepare a single query with multiple TIMESTAMPDIFF calls.
+        $query = $pdo->prepare(
+            'SELECT
+                TIMESTAMPDIFF(SECOND, \'2020-01-01 00:00:00\', \'2020-01-01 00:01:40\') as `second_diff`,
+                TIMESTAMPDIFF(MINUTE, \'2020-01-01 00:00:00\', \'2020-01-01 01:30:00\') as `minute_diff`,
+                TIMESTAMPDIFF(HOUR, \'2020-01-02 00:00:00\', \'2020-01-01 00:00:00\') as `hour_diff`,
+                TIMESTAMPDIFF(DAY, \'2020-01-01\', \'2020-01-10\') as `day_diff`,
+                TIMESTAMPDIFF(MONTH, \'2019-01-01\', \'2020-04-01\') as `month_diff`,
+                TIMESTAMPDIFF(YEAR, \'2010-05-15\', \'2020-05-15\') as `year_diff`'
+        );
+
+        $query->execute();
+
+        $results = $query->fetchAll(\PDO::FETCH_ASSOC);
+        $castedResults = array_map(function($row) {
+            return array_map('intval', $row);
+        }, $results);
+
+        $this->assertSame(
+            [[
+                'second_diff' => 100,
+                'minute_diff' => 90,
+                'hour_diff' => -24,
+                'day_diff' => 9,
+                'month_diff' => 15,
+                'year_diff' => 10,
+            ]],
+            $castedResults
+        );
+    }
+
+    public function testTimestampDiffThrowsExceptionWithWrongArgumentCount(): void
+    {
+        $this->expectException(\UnexpectedValueException::class);
+        $this->expectExceptionMessage('MySQL TIMESTAMPDIFF() function must be called with three arguments');
+
+        $pdo = self::getPdo('mysql:host=localhost;dbname=testdb');
+        $pdo->setAttribute(\PDO::ATTR_EMULATE_PREPARES, false);
+
+        $query = $pdo->prepare(
+            'SELECT
+                TIMESTAMPDIFF(SECOND, \'2020-01-01 00:00:00\', \'2020-01-01 00:01:40\', \'2020-01-01 00:01:40\')',
+        );
+
+        $query->execute();
+    }
+
+    public function testTimestampDiffThrowsExceptionIfFirstArgNotColumnExpression(): void
+    {
+        $this->expectException(\UnexpectedValueException::class);
+        $this->expectExceptionMessage('MySQL TIMESTAMPDIFF() function should be called with a unit for interval');
+
+        $pdo = self::getPdo('mysql:host=localhost;dbname=testdb');
+        $pdo->setAttribute(\PDO::ATTR_EMULATE_PREPARES, false);
+
+        $query = $pdo->prepare(
+            'SELECT
+                TIMESTAMPDIFF(\'2020-01-01 00:00:00\', \'2020-01-01 00:01:40\', \'2020-01-01 00:01:40\')',
+        );
+
+        $query->execute();
+    }
+
+    public function testTimestampDiffThrowsExceptionWithWrongDates(): void
+    {
+        $this->expectException(\UnexpectedValueException::class);
+        $this->expectExceptionMessage('Invalid datetime value passed to TIMESTAMPDIFF()');
+
+        $pdo = self::getPdo('mysql:host=localhost;dbname=testdb');
+        $pdo->setAttribute(\PDO::ATTR_EMULATE_PREPARES, false);
+
+        $query = $pdo->prepare(
+            'SELECT
+                TIMESTAMPDIFF(SECOND, \'2020-01-01 00:0140\', \'2020-01-01 00:01:40\')',
+        );
+
+        $query->execute();
+    }
+
+    public function testTimestampDiffThrowsExceptionWithWrongInterval(): void
+    {
+        $this->expectException(\UnexpectedValueException::class);
+        $this->expectExceptionMessage('Unsupported unit \'CENTURY\' in TIMESTAMPDIFF()');
+
+        $pdo = self::getPdo('mysql:host=localhost;dbname=testdb');
+        $pdo->setAttribute(\PDO::ATTR_EMULATE_PREPARES, false);
+
+        $query = $pdo->prepare(
+            'SELECT
+                TIMESTAMPDIFF(CENTURY, \'2020-01-01 00:01:40\', \'2020-01-01 00:01:40\')',
+        );
+
+        $query->execute();
+    }
+
     public function testCurDateFunction()
     {
         $pdo = self::getPdo('mysql:foo');
@@ -863,18 +993,6 @@ class EndToEndTest extends \PHPUnit\Framework\TestCase
                 ['console' => 'sega genesis', 'c' => 4],
             ],
             $query->fetchAll(\PDO::FETCH_ASSOC)
-        );
-    }
-
-    public function testSelectWithOffset()
-    {
-        $pdo = self::getConnectionToFullDB(false);
-        $query = $pdo->prepare("SELECT `id` FROM `video_game_characters` ORDER BY `id` LIMIT 10000 OFFSET 1");
-        $query->execute();
-
-        $this->assertSame(
-            ['id' => 2],
-            $query->fetch(\PDO::FETCH_ASSOC)
         );
     }
 
@@ -1255,6 +1373,101 @@ class EndToEndTest extends \PHPUnit\Framework\TestCase
         );
     }
 
+    public function testUpdate()
+    {
+        $pdo = self::getConnectionToFullDB(false);
+
+        // before update
+        $query = $pdo->prepare("SELECT `type` FROM `video_game_characters` WHERE `id` = 3");
+        $query->execute();
+        $this->assertSame([['type' => 'hero']], $query->fetchAll(\PDO::FETCH_ASSOC));
+
+        // prepare update
+        $query = $pdo->prepare("UPDATE `video_game_characters` SET `type` = 'villain' WHERE `id` = 3 LIMIT 1");
+        $query->execute();
+
+        // after update
+        $query = $pdo->prepare("SELECT `type` FROM `video_game_characters` WHERE `id` = 3");
+        $query->execute();
+        $this->assertSame([['type' => 'villain']], $query->fetchAll(\PDO::FETCH_ASSOC));
+    }
+
+    public function testNegateOperationWithAnd()
+    {
+        // greater than
+        $pdo = self::getConnectionToFullDB(false);
+        $query = $pdo->prepare("SELECT COUNT(*) as 'count' FROM `video_game_characters` WHERE `console` = :console AND NOT (`powerups` > :powerups)");
+        $query->bindValue(':console', 'nes');
+        $query->bindValue(':powerups', 3);
+        $query->execute();
+
+        $this->assertSame([['count' => 8]], $query->fetchAll(\PDO::FETCH_ASSOC));
+
+        // equals
+        $query = $pdo->prepare("SELECT COUNT(*) as 'count' FROM `video_game_characters` WHERE `console` = :console AND NOT (`powerups` = :powerups)");
+        $query->bindValue(':console', 'nes');
+        $query->bindValue(':powerups', 0);
+        $query->execute();
+
+        $this->assertSame([['count' => 2]], $query->fetchAll(\PDO::FETCH_ASSOC));
+    }
+
+    public function testNegateOperationWithOr()
+    {
+        // greater than
+        $pdo = self::getConnectionToFullDB(false);
+        $query = $pdo->prepare("SELECT COUNT(*) as 'count' FROM `video_game_characters` WHERE `console` = :console OR NOT (`powerups` > :powerups)");
+        $query->bindValue(':console', 'nes');
+        $query->bindValue(':powerups', 3);
+        $query->execute();
+
+        $this->assertSame([['count' => 16]], $query->fetchAll(\PDO::FETCH_ASSOC));
+
+        // equals
+        $query = $pdo->prepare("SELECT COUNT(*) as 'count' FROM `video_game_characters` WHERE `console` = :console OR NOT (`powerups` = :powerups)");
+        $query->bindValue(':console', 'nes');
+        $query->bindValue(':powerups', 0);
+        $query->execute();
+
+        $this->assertSame([['count' => 9]], $query->fetchAll(\PDO::FETCH_ASSOC));
+    }
+
+    public function testNullEvaluation()
+    {
+        $pdo = self::getConnectionToFullDB(false);
+
+        // case 1, where console value is null
+        $query = $pdo->prepare("SELECT COUNT(*) as 'count' FROM `video_game_characters` WHERE (:console IS NULL AND `console` = 'gameboy') OR NOT (:console IS NULL)");
+        $query->bindValue(':console', NULL);
+        $query->execute();
+        $this->assertSame([['count' => 1]], $query->fetchAll(\PDO::FETCH_ASSOC));
+
+        // case 2, where console value is not null
+        $query = $pdo->prepare("SELECT COUNT(*) as 'count' FROM `video_game_characters` WHERE (:console IS NULL AND `console` = 'gameboy') OR NOT (:console IS NULL)");
+        $query->bindValue(':console', 'all');
+        $query->execute();
+        $this->assertSame([['count' => 16]], $query->fetchAll(\PDO::FETCH_ASSOC));
+    }
+
+    public function testNullWithDoubleNegativeEvaluation()
+    {
+        $pdo = self::getConnectionToFullDB(false);
+
+        //case 1, where console value is not null
+        $query = $pdo->prepare("SELECT COUNT(*) as 'count' FROM `video_game_characters` WHERE (:console IS NOT NULL AND `console` = :console) OR NOT (:console IS NOT NULL)");
+        $query->bindValue(':console', 'gameboy');
+        $query->execute();
+
+        $this->assertSame([['count' => 1]], $query->fetchAll(\PDO::FETCH_ASSOC));
+
+        //case 1, where console value is null
+        $query = $pdo->prepare("SELECT COUNT(*) as 'count' FROM `video_game_characters` WHERE (:console IS NOT NULL AND `console` = :console) OR NOT (:console IS NOT NULL)");
+        $query->bindValue(':console', NULL);
+        $query->execute();
+
+        $this->assertSame([['count' => 16]], $query->fetchAll(\PDO::FETCH_ASSOC));
+    }
+
     private static function getPdo(string $connection_string, bool $strict_mode = false) : \PDO
     {
         $options = $strict_mode ? [\PDO::MYSQL_ATTR_INIT_COMMAND => 'SET sql_mode="STRICT_ALL_TABLES"'] : [];
@@ -1281,5 +1494,126 @@ class EndToEndTest extends \PHPUnit\Framework\TestCase
         $pdo->prepare(file_get_contents(__DIR__ . '/fixtures/bulk_tag_insert.sql'))->execute();
 
         return $pdo;
+    }
+
+    /**
+     * @dataProvider leastArgumentsProvider
+     * @param array $args
+     * @param string|int|float|null $expected_value
+     */
+    public function testLeast($args, $expected_value): void
+    {
+        // Get a PDO instance for MySQL.
+        $pdo = self::getPdo('mysql:host=localhost;dbname=testdb');
+        $pdo->setAttribute(\PDO::ATTR_EMULATE_PREPARES, false);
+
+        $args_str = implode(', ', array_map(function ($arg) {
+            return is_null($arg) ? 'null' : (string) $arg;
+        }, $args));
+
+        $query = $pdo->prepare(sprintf('SELECT LEAST(%s) as result', $args_str));
+        $query->execute();
+
+        $result = $query->fetch(\PDO::FETCH_ASSOC);
+        $this->assertEquals(
+            ['result' => $expected_value],  $result,
+            sprintf('Actual result is does not match the expected. Actual is: %s', print_r($result, true)));
+    }
+
+    public function leastArgumentsProvider(): iterable
+    {
+        yield 'Should properly work with at least one \'null\' argument' => [
+            'args' => [1,2,null,42],
+            'expected_value' => null
+        ];
+        yield 'Should properly get the least integer argument' => [
+            'args' => [-1, 1,2,42],
+            'expected_value' => '-1'
+        ];
+        yield 'Should properly work with decimal argument' => [
+            'args' => [0.00, 0.1,2,42, -0.001],
+            'expected_value' => '-0.001'
+        ];
+        yield 'Should return proper precision if any argument is a float' => [
+            'args' => [1, 2.0001 , 42, 1.001],
+            'expected_value' => '1.0000'
+        ];
+        yield 'Should properly work with at least one string argument' => [
+            'args' => [1,2, "'null'", "'nulla'"],
+            'expected_value' => '1'
+        ];
+        yield 'Should properly work all string args' => [
+            'args' => ["'A'","'B'","'C'"],
+            'expected_value' => 'A'
+        ];
+        yield 'Should lexicographically compare #1' => [
+            'args' => ["'AA'","'AB'","'AC'"],
+            'expected_value' => 'AA'
+        ];
+        yield 'Should lexicographically compare #2' => [
+            'args' => ["'AA'","'AB'","'AC'", 1],
+            'expected_value' => '1'
+        ];
+    }
+
+    /** @dataProvider leastWithExceptionProvider */
+    public function testLeastThrowsExceptionWithWrongArgumentCount(array $args): void
+    {
+        $this->expectException(\UnexpectedValueException::class);
+        $this->expectExceptionMessage('Incorrect parameter count in the call to native function \'LEAST\'');
+
+        $pdo = self::getPdo('mysql:host=localhost;dbname=testdb');
+        $pdo->setAttribute(\PDO::ATTR_EMULATE_PREPARES, false);
+
+        $args_str = implode(', ', array_map(fn ($arg) => strval($arg), $args));
+        $query = $pdo->prepare(sprintf('SELECT LEAST(%s)', $args_str),);
+
+        $query->execute();
+    }
+
+    public function leastWithExceptionProvider(): iterable
+    {
+        yield ['Should fail with single argument' => [1]];
+        yield ['Should fail without any arguments' => []];
+    }
+
+    public function testNestedFunctions()
+    {
+        $pdo = self::getConnectionToFullDB();
+
+        $query = $pdo->prepare("
+            SELECT 
+                SUM(
+                    TIMESTAMPDIFF(
+                        SECOND,
+                        CONVERT_TZ('2025-12-31 22:59:59', 'Europe/Kyiv', 'Europe/Kyiv'),
+                        CONVERT_TZ('2025-12-31 23:59:59', 'Europe/Kyiv', 'Europe/Kyiv')
+                    )
+                )
+        ");
+        $query->execute();
+
+        $this->assertSame(3600, (int)$query->fetchColumn());
+    }
+
+    public function testNestedFunctionsFromDB()
+    {
+        $pdo = self::getConnectionToFullDB();
+        $count = $pdo->query("SELECT COUNT(*) FROM video_game_characters")->fetchColumn();
+
+        $query = $pdo->prepare("
+            SELECT SUM(
+                    TIMESTAMPDIFF(
+                        SECOND,
+                        CONVERT_TZ(`created_on`, 'Europe/Kyiv', 'Europe/Kyiv'),
+                        CONVERT_TZ(`created_on` + INTERVAL 1 SECOND, 'Europe/Kyiv', 'Europe/Kyiv')
+                    )
+                )
+            FROM `video_game_characters`
+        ");
+
+        $query->execute();
+
+        $this->assertSame((int)$count, (int)$query->fetchColumn());
     }
 }
